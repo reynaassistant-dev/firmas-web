@@ -10,9 +10,8 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
-import java.net.URI
+import java.io.IOException
 
 class ClienteApiTest {
     @Test
@@ -105,7 +104,7 @@ class ClienteApiTest {
         assertTrue(recepcion.codigo.startsWith("TRXD-"))
         assertEquals("FICHA-SINTETICA", recepcion.codigo_empleado)
         assertEquals("Declaración sintética", recepcion.declaracion)
-        firmar(origen, recepcion.id)
+        firmar(cliente, recepcion.id)
         assertNotNull(cliente.estado(recepcion.id)?.firmado_en)
         fun pendientes() = cliente.pendientes().single { it.id == recepcion.id }.pendientes.orEmpty()
         assertEquals(listOf(1L, 2L, 3L), pendientes().map { it.id })
@@ -116,7 +115,7 @@ class ClienteApiTest {
                 entregaId = recepcion.id),
         )
         assertEquals("2", devolucion.herramientas?.single()?.cantidad)
-        firmar(origen, devolucion.id)
+        firmar(cliente, devolucion.id)
         assertEquals(listOf(2L, 3L), pendientes().map { it.id })
 
         val cambio = cliente.alta(
@@ -125,24 +124,77 @@ class ClienteApiTest {
                 Herramienta(descripcion = "Pinza nueva sintética", cantidad = "1", estado = "Excelente", sentido = "recibe"),
             ), entregaId = recepcion.id),
         )
-        firmar(origen, cambio.id)
+        firmar(cliente, cambio.id)
         assertEquals(listOf(3L, 4L), pendientes().map { it.id })
         assertEquals("Pinza nueva sintética", pendientes().last().descripcion)
     }
 
-    private fun firmar(origen: String, id: Long) {
-        val png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXWQAAAAASUVORK5CYII="
-        val conexion = URI.create("$origen/api/movimientos/$id/firmar").toURL().openConnection() as HttpURLConnection
-        try {
-            conexion.connectTimeout = 5_000
-            conexion.readTimeout = 5_000
-            conexion.requestMethod = "POST"
-            conexion.doOutput = true
-            conexion.setRequestProperty("Content-Type", "application/json")
-            conexion.outputStream.use { it.write("""{"firmaEmpleado":"$png","firmaResponsable":"$png"}""".toByteArray()) }
-            assertEquals(200, conexion.responseCode)
-        } finally {
-            conexion.disconnect()
+    @Test
+    fun respuestaDeFirmaPerdidaSeReconciliaPorIdAunqueElActivoCambie() {
+        var publicado = false
+        var escritos = 0
+        val servidor = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        assertFalse(servidor.address.port in listOf(3000, 8090))
+        servidor.createContext("/") { peticion ->
+            val (http, contenido) = when (peticion.requestURI.path) {
+                "/api/activo" -> 200 to if (publicado) {
+                    """{"id":28,"codigo":"TRX-2026-002","estado":"esperando"}"""
+                } else {
+                    """{"id":27,"codigo":"TRX-2026-001","estado":"esperando"}"""
+                }
+                "/api/movimientos/27/firmar" -> {
+                    val cuerpo = peticion.requestBody.bufferedReader().use { it.readText() }
+                    val json = JsonParser.parseString(cuerpo).asJsonObject
+                    if (peticion.requestMethod == "POST" && json.get("firmaEmpleado").asString == PNG &&
+                        json.get("firmaResponsable").asString == PNG_RESPONSABLE
+                    ) {
+                        escritos++
+                        publicado = true
+                        502 to "{}"
+                    } else {
+                        400 to "{}"
+                    }
+                }
+                "/api/movimientos/27/estado" -> 200 to if (publicado) {
+                    """{"id":27,"codigo":"TRX-2026-001","estado":"firmado","firmado_en":"2026-01-01T00:00:00Z"}"""
+                } else {
+                    """{"id":27,"codigo":"TRX-2026-001","estado":"esperando","firmado_en":null}"""
+                }
+                else -> 404 to "{}"
+            }
+            val bytes = contenido.toByteArray()
+            peticion.responseHeaders.set("Content-Type", "application/json")
+            peticion.sendResponseHeaders(http, bytes.size.toLong())
+            peticion.responseBody.use { it.write(bytes) }
         }
+        servidor.start()
+        try {
+            val cliente = ClienteApi("http://127.0.0.1:${servidor.address.port}", permitirHttpLocal = true)
+            assertEquals(27L, cliente.activo()?.id)
+            assertEquals(27L, cliente.activo()?.id)
+            assertEquals("esperando", cliente.estadoFirma(27).estado)
+            val fallo = assertThrows(ErrorApi::class.java) { cliente.firmar(27, PNG, PNG_RESPONSABLE) }
+            assertEquals(502, fallo.http)
+            assertEquals(28L, cliente.activo()?.id)
+            val firmado = cliente.estadoFirma(27)
+            assertEquals("firmado", firmado.estado)
+            assertNotNull(firmado.firmado_en)
+            assertEquals(1, escritos)
+            assertThrows(IOException::class.java) { cliente.estadoFirma(28) }
+        } finally {
+            servidor.stop(0)
+        }
+    }
+
+    private fun firmar(cliente: ClienteApi, id: Long) {
+        val movimiento = cliente.firmar(id, PNG, PNG_RESPONSABLE)
+        assertEquals(id, movimiento.id)
+        assertEquals("firmado", movimiento.estado)
+        assertNotNull(movimiento.firmado_en)
+    }
+
+    companion object {
+        private const val PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAQAAABeK7cBAAAADUlEQVR4nGPg/8/AAAADPgEPpjFeOQAAAABJRU5ErkJggg=="
+        private const val PNG_RESPONSABLE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAQAAABeK7cBAAAADUlEQVR4nGNgYHD7DwABkAFGdxMcdAAAAABJRU5ErkJggg=="
     }
 }

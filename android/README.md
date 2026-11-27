@@ -1,8 +1,8 @@
-# Firmas Almacén para Android
+# Firmas para Android
 
 La aplicación requiere Android 8.0 o posterior. `app` aloja la actividad y
 los ajustes, `almacen` contiene la operación del almacenista y `comun`
-contiene los modelos y el cliente HTTP que puede reutilizar un módulo de Firma.
+contiene los modelos y el cliente HTTP compartidos.
 
 ## Compilar el APK de depuración
 
@@ -46,6 +46,39 @@ consulta el listado de movimientos para recuperar una firma reciente. Una
 cancelación no aparece en ese listado y su estado queda por confirmar. La
 protección frente a dos altas concurrentes y la reconciliación definitiva por
 ID requieren #14.
+
+## Preparar una tablet de firma
+
+1. En la pantalla de servidor de Almacén, elige **Configurar modo Firma**.
+   Indica la URL base HTTPS o importa una imagen con un QR que contenga
+   únicamente esa URL. En una tablet gestionada, el administrador puede
+   fijar la dirección con la configuración de app `servidor_https`.
+2. Solicita a administración el código de vinculación de un solo uso.
+   Introdúcelo y crea un PIN local de soporte de 6 a 12 dígitos. La app
+   comprueba salud y sesión de tablet antes de guardar la dirección y cifra
+   la credencial con Android Keystore. Al cambiar de origen pide otro código.
+3. Autoriza el paquete `co.firmas.piloto` para Lock Task desde el controlador
+   de políticas de Android. Si el equipo carece de gestión, acepta la
+   fijación de pantalla cuando Android la pida. El piloto usa una tablet
+   vinculada y un turno global.
+
+En modo Firma se revisan el resumen y la declaración, y se firman ambos
+pasos. La app sondea por HTTPS en primer plano cada tres segundos, aumenta
+la espera hasta treinta segundos cuando falla la consulta y vuelve a
+consultar al recuperar la conexión. Al enviar conserva las dos firmas
+hasta comprobar el resultado por ID. Si el proceso se cierra mientras
+se dibuja, al volver avisa y pide capturar de nuevo si el turno sigue pendiente.
+
+Para abrir soporte mantén tres dedos sobre la pantalla durante tres
+segundos e introduce el PIN. Los ajustes y la salida a Almacén quedan
+detrás de este acceso. Para seleccionar una imagen QR, la app sale
+temporalmente de Lock Task tras autenticar a soporte y lo vuelve a pedir
+al regresar a Firma. **Volver** conserva la dirección y las firmas en curso.
+Una dirección administrada nueva requiere comprobarla y vincular el equipo
+antes de aplicarla.
+
+Para el piloto de Firma se necesitan la vinculación de #13 y la consulta de
+estado y el guardado de ambos PNG de #14.
 
 ## Pruebas
 

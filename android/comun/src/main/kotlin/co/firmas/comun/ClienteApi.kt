@@ -23,11 +23,48 @@ class ClienteApi(
     }
 
     fun comprobarAcceso() {
+        comprobarSalud()
+        activo()
+    }
+
+    private fun comprobarSalud() {
         if (pedir("/api/salud").asJsonObject.get("ok")?.asBoolean != true) {
             throw IOException("El servidor no informó que está disponible.")
         }
-        activo()
     }
+
+    fun comprobarTablet(): String {
+        comprobarSalud()
+        val sesion = pedir("/api/dispositivos/sesion").asJsonObject
+        val id = sesion.get("dispositivoId")?.takeIf { it.isJsonPrimitive }?.asString
+        check(sesion.get("rol")?.asString == "tablet" && !id.isNullOrBlank()) {
+            "El servidor no reconoció la sesión de la tablet."
+        }
+        return id
+    }
+
+    fun vincularTablet(codigo: String): String {
+        comprobarSalud()
+        val datos = pedir("/api/dispositivos/vincular", gson.toJson(mapOf("codigo" to codigo))).asJsonObject
+        return datos.get("credencial")?.takeIf { it.isJsonPrimitive }?.asString
+            ?.takeIf { it.isNotBlank() } ?: throw IOException("El servidor no entregó la credencial de la tablet.")
+    }
+
+    fun firmar(id: Long, empleado: String, responsable: String): Movimiento {
+        val cuerpo = gson.toJson(mapOf("firmaEmpleado" to empleado, "firmaResponsable" to responsable))
+        val resultado = movimiento(pedir("/api/movimientos/$id/firmar", cuerpo))
+        if (resultado.id != id || resultado.estado != "firmado" || resultado.firmado_en.isNullOrBlank()) {
+            throw IOException("El servidor no confirmó la firma del movimiento.")
+        }
+        return resultado
+    }
+
+    fun estadoFirma(id: Long): Movimiento =
+        movimiento(pedir("/api/movimientos/$id/estado")).also {
+            if (it.id != id || (it.estado == "firmado" && it.firmado_en.isNullOrBlank())) {
+                throw IOException("El servidor devolvió un estado de firma inválido.")
+            }
+        }
 
     fun activo(): Movimiento? = pedir("/api/activo").let {
         if (it.isJsonNull) null else movimiento(it).also(::exigirEnEspera)
@@ -72,6 +109,7 @@ class ClienteApi(
             conexion.connectTimeout = 5_000
             conexion.readTimeout = 5_000
             conexion.setRequestProperty("Accept", "application/json")
+            conexion.setRequestProperty("Cache-Control", "no-store")
             if (credencial.isNotBlank()) conexion.setRequestProperty("Authorization", "Bearer $credencial")
             if (cuerpo != null) {
                 val bytes = cuerpo.toByteArray(Charsets.UTF_8)

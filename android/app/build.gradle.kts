@@ -30,4 +30,5 @@ dependencies {
     implementation(project(":comun"))
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
+    implementation("com.google.zxing:core:3.5.3")
 }
